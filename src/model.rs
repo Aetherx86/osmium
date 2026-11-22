@@ -251,6 +251,9 @@ pub struct Predictor {
     ctx: [u64; N_CTX],
     slot: [usize; N_CTX],
     state: [u8; N_CTX],
+    seen: u32,
+    m4: Mixer,
+    pr4: i32,
     run_ctr: Vec<u32>,
     run_idx: [usize; N_CTX],
     // byte state
@@ -280,7 +283,7 @@ pub struct Predictor {
     m2: Mixer,
     m3: Mixer,
     mf: Mixer,
-    xf: [i32; 4],
+    xf: [i32; 5],
     pr_mix: i32,
     pr1: i32,
     pr2: i32,
@@ -310,6 +313,9 @@ impl Predictor {
             ctx: [0; N_CTX],
             slot: [0; N_CTX],
             state: [0; N_CTX],
+            seen: 0,
+            m4: Mixer::new(N_IN, 256, 3),
+            pr4: 2048,
             run_ctr: vec![COUNTER_INIT; N_CTX * 64],
             run_idx: [usize::MAX; N_CTX],
             c0: 1,
@@ -335,8 +341,8 @@ impl Predictor {
             m1: Mixer::new(N_IN, 256, 3),
             m2: Mixer::new(N_IN, 2048, 3),
             m3: Mixer::new(N_IN, 256 * 8, 3),
-            mf: Mixer::new(4, 256, 1),
-            xf: [0; 4],
+            mf: Mixer::new(5, 256, 1),
+            xf: [0; 5],
             pr_mix: 2048,
             pr1: 2048,
             pr2: 2048,
@@ -385,9 +391,10 @@ impl Predictor {
 
     fn find_slots(&mut self) {
         for i in 0..N_CTX {
-            let (b, w, _) = self.tables[i].find(hash2(self.ctx[i], self.c0 as u64));
+            let (b, w, seen) = self.tables[i].find(hash2(self.ctx[i], self.c0 as u64));
             self.slot[i] = b;
             self.way[i] = w;
+            if seen { self.seen |= 1 << i } else { self.seen &= !(1 << i) }
         }
         if self.bitpos == 0 {
             for i in 0..N_CTX { self.run_at[i] = self.runs[i].index(hash2(self.ctx[i], 0x52_55_4e)); }
@@ -449,7 +456,11 @@ impl Predictor {
         self.pr1 = squash(s1);
         self.pr2 = squash(s2);
         self.pr3 = squash(s3);
-        self.xf = [s1, s2, s3, 256];
+        // orders 2, 3, 4, 5 and 6 present in the tables, with the bit position
+        let sel4 = ((self.seen >> 2 & 7) | (self.seen >> 9 & 8) | (self.seen >> 1 & 16)) as usize;
+        let s4 = self.m4.mix(&self.x, sel4 << 3 | self.bitpos as usize);
+        self.pr4 = squash(s4);
+        self.xf = [s1, s2, s3, s4, 256];
         self.pr_mix = squash(self.mf.mix(&self.xf, self.c0 as usize));
         let p1 = self.a1.pp(&self.st, self.pr_mix, self.c0 as usize);
         let h = (self.c0 as usize | ((self.c4 as usize & 0xff) << 8)) & 0xffff;
@@ -481,6 +492,7 @@ impl Predictor {
         self.m1.update(&self.x, y - self.pr1);
         self.m2.update(&self.x, y - self.pr2);
         self.m3.update(&self.x, y - self.pr3);
+        self.m4.update(&self.x, y - self.pr4);
         let xf = self.xf;
         self.mf.update(&xf, y - self.pr_mix);
         self.a1.update(bit);
