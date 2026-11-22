@@ -296,7 +296,7 @@ impl LongMatch {
 
 // ------------------------------------------------------------------ predictor
 
-const N_CTX: usize = 18;         // hashed context models
+const N_CTX: usize = 19;         // hashed context models
 const N_IN: usize = 3 * N_CTX + 5;   // two per context + match model (2 inputs) + bias
 const MATCH_MIN: usize = 7;
 
@@ -361,7 +361,7 @@ impl Predictor {
     /// `n` is the input length; table sizes grow with it (and are part of the format).
     pub fn new(n: usize) -> Self {
         let big = if n > 256 << 20 { 22 } else if n > 32 << 20 { 21 } else if n > 4 << 20 { 20 } else { 18 };
-        let bits = [12, 16, big - 2, big, big, big, big, big - 1, big, big - 2, big - 2, big - 1, big, big - 2, big - 2, big, big - 1, big - 1];
+        let bits = [12, 16, big - 2, big, big, big, big, big - 1, big, big - 2, big - 2, big - 1, big, big - 2, big - 2, big, big - 1, big - 1, big - 1];
         let match_bits = (big + 2).min(24);
         Predictor {
             st: Stretch::new(),
@@ -451,6 +451,7 @@ impl Predictor {
             hash2(15, (c & 0xffff) | (self.ind2[(c & 0xffff) as usize] as u64) << 16),
             hash2(16, hash2(self.word, self.prev_word2)),
             hash2(17, hash2(self.markup, self.word)),
+            hash2(18, hash2(self.prev_word, c & 0xff)),
         ];
     }
 
