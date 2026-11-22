@@ -80,15 +80,6 @@ struct Slot {
 const PAIR_INIT: u32 = 0x8000_8000;
 const EMPTY_SLOT: Slot = Slot { check: 0, c: [PAIR_INIT; 15] };
 
-#[inline]
-fn half_update(h: u32, bit: u8, limit: u32, rates: &Rates) -> u32 {
-    let n = h & 15;
-    let p = (h >> 4) as i64;
-    let target = if bit == 1 { 4095 } else { 0 };
-    let p = (p + (((target - p) * rates.0[n as usize] as i64) >> 16)).clamp(1, 4095) as u32;
-    (p << 4) | if n < limit { n + 1 } else { n }
-}
-
 /// High half: slow probability (16 bits). Low half: fast probability (12 bits) and a shared
 /// hit count (4 bits). The slow rate is 1/(n+1.5) up to `slow`, the fast one up to `fast`.
 #[inline]

@@ -10,25 +10,25 @@ in the browser. Its `.osm` files are byte-identical to the command-line tool's.
 
 ## Results
 
-Apple M4 MacBook Air, one core. Peak memory from `/usr/bin/time -l`.
+Apple M4 MacBook Air, one core (the enwik9 runs shared the machine with other jobs, so their times are pessimistic). Peak memory from `/usr/bin/time -l`.
 
 | File | Original | Osmium 0.1.0 | bits/byte | Compress | Decompress | Memory |
 | :--- | ---: | ---: | ---: | ---: | ---: | ---: |
 | enwik8 | 100,000,000 | **20,312,078** | 1.625 | 95 s | 118 s | 1.2 GB |
-| enwik9 | 1,000,000,000 | ENWIK9_SIZE | ENWIK9_BPC | ENWIK9_CT | ENWIK9_DT | ENWIK9_MEM |
+| enwik9 | 1,000,000,000 | 168,149,041 | 1.345 | 1,347 s | 1,001 s | 3.5 GB |
 
 Same files with standard tools (`-9`; xz with `-9e`, single thread):
 
 | File | gzip | bzip2 | xz | Osmium |
 | :--- | ---: | ---: | ---: | ---: |
 | enwik8 | 36,475,811 | 29,008,758 | 24,831,648 | 20,312,078 |
-| enwik9 | ENWIK9_GZ | ENWIK9_BZ | ENWIK9_XZ | ENWIK9_SIZE |
+| enwik9 | 322,789,249 | 253,977,891 | 211,776,220 | 168,149,041 |
 
 ### Against the Hutter Prize
 
 The prize scores the compressed `enwik9` plus the size of the decompressor. The record listed
 on July 24, 2026 is **100,424,672 bytes** (Vladimir Ivanov, fx2-cmix-T). Osmium's total is
-ENWIK9_TOTAL bytes (archive plus the zipped decompressor), so it is not a contender: the
+168,311,575 bytes (archive plus the zipped decompressor), so it is not a contender: the
 record holders run thousands of models, LSTM mixers and large preprocessing dictionaries for
 days. Osmium is a compact, readable baseline of the same family (about 600 lines) that beats
 the general-purpose tools by a wide margin and is meant to be built on.
