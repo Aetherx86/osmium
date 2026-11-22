@@ -243,6 +243,7 @@ pub struct Predictor {
     a1: Apm,
     a2: Apm,
     a3: Apm,
+    a4: Apm,
     pr: i32,
 }
 
@@ -290,6 +291,7 @@ impl Predictor {
             a1: Apm::new(256, 7),
             a2: Apm::new(65536, 7),
             a3: Apm::new(1 << 20, 7),
+            a4: Apm::new(64 * 256, 7),
             pr: 2048,
         }
         .started()
@@ -389,7 +391,10 @@ impl Predictor {
         let p2 = self.a2.pp(&self.st, self.pr_mix, h);
         let h3 = (hash2(self.c4 & 0xffff, self.c0 as u64) >> 44) as usize;
         let p3 = self.a3.pp(&self.st, self.pr_mix, h3);
-        self.pr = ((2 * self.pr_mix + 2 * p1 + 2 * p2 + 2 * p3 + 4) >> 3).clamp(1, 4095);
+        // match state: length bucket and expected bit (or none), with the partial byte
+        let ms = if self.match_idx == usize::MAX { 0 } else { self.match_idx + 1 };
+        let p4 = self.a4.pp(&self.st, self.pr_mix, (ms.min(63) << 8) | self.c0 as usize);
+        self.pr = ((self.pr_mix + 2 * p1 + 2 * p2 + 2 * p3 + p4 + 4) >> 3).clamp(1, 4095);
     }
 
     pub fn update(&mut self, bit: u8) {
@@ -414,6 +419,7 @@ impl Predictor {
         self.a1.update(bit);
         self.a2.update(bit);
         self.a3.update(bit);
+        self.a4.update(bit);
 
         // advance bit state
         self.c0 = (self.c0 << 1) | bit as u32;
