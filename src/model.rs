@@ -233,10 +233,71 @@ impl Apm {
     }
 }
 
+// ------------------------------------------------------------------ long match model
+
+/// Finds repeats of at least `LONG_MIN` bytes (templates, boilerplate) and predicts the byte
+/// that followed, independently of the short match model.
+const LONG_MIN: usize = 24;
+
+struct LongMatch {
+    tab: Vec<u32>,
+    bits: u32,
+    ptr: usize,
+    len: usize,
+    byte: u32,
+    ctr: [u32; 64],
+    idx: usize,
+}
+
+impl LongMatch {
+    fn new(bits: u32) -> Self { LongMatch { tab: vec![0; 1 << bits], bits, ptr: 0, len: 0, byte: 0, ctr: [COUNTER_INIT; 64], idx: usize::MAX } }
+
+    fn bucket(&self) -> usize { ((self.len - LONG_MIN) / 16).min(31) }
+
+    fn update_byte(&mut self, buf: &[u8], b: u8) {
+        let pos = buf.len();
+        if self.len > 0 {
+            if self.byte as u8 == b { self.len = (self.len + 1).min(65535); self.ptr += 1; } else { self.len = 0; }
+        }
+        if pos >= LONG_MIN {
+            let w = |k: usize| u64::from_le_bytes(buf[pos - 8 * (k + 1)..pos - 8 * k].try_into().unwrap());
+            let h = (hash2(hash2(w(0), w(1)), w(2)) >> (64 - self.bits)) as usize;
+            if self.len == 0 {
+                let cand = self.tab[h] as usize;
+                if cand > 0 {
+                    let mut l = 0;
+                    while l < 400 && l < cand && buf[cand - 1 - l] == buf[pos - 1 - l] { l += 1; }
+                    if l >= LONG_MIN { self.len = l; self.ptr = cand; }
+                }
+            }
+            self.tab[h] = pos as u32;
+        }
+        self.byte = if self.len > 0 { buf[self.ptr] as u32 } else { 0 };
+    }
+
+    /// Two mixer inputs for the next bit.
+    fn inputs(&mut self, st: &Stretch, c0: u32, bitpos: u32) -> (i32, i32) {
+        if self.len > 0 && (self.byte + 256) >> (8 - bitpos) == c0 {
+            let b = (self.byte >> (7 - bitpos)) & 1;
+            self.idx = self.bucket() * 2 + b as usize;
+            let p = st.get(counter_p12(self.ctr[self.idx]));
+            let conf = 512 + 32 * self.bucket() as i32;
+            (p, if b == 1 { conf } else { -conf })
+        } else {
+            self.idx = usize::MAX;
+            (0, 0)
+        }
+    }
+
+    fn update_bit(&mut self, bit: u8, rates: &Rates) {
+        if self.idx != usize::MAX { counter_update(&mut self.ctr[self.idx], bit, 1023, rates); }
+    }
+}
+
 // ------------------------------------------------------------------ predictor
 
 const N_CTX: usize = 16;         // hashed context models
-const N_IN: usize = 3 * N_CTX + 3;   // two per context + match model (2 inputs) + bias
+const N_IN: usize = 3 * N_CTX + 5;   // two per context + match model (2 inputs) + bias
 const MATCH_MIN: usize = 7;
 
 pub struct Predictor {
@@ -277,6 +338,7 @@ pub struct Predictor {
     match_byte: u32,
     match_ctr: [u32; 64],
     match_idx: usize,
+    long: LongMatch,
     // mixing
     x: [i32; N_IN],
     m1: Mixer,
@@ -337,6 +399,7 @@ impl Predictor {
             match_byte: 0,
             match_ctr: [COUNTER_INIT; 64],
             match_idx: 0,
+            long: LongMatch::new(match_bits - 2),
             x: [0; N_IN],
             m1: Mixer::new(N_IN, 256, 3),
             m2: Mixer::new(N_IN, 2048, 3),
@@ -446,6 +509,9 @@ impl Predictor {
         }
         self.x[2 * N_CTX] = mi;
         self.x[2 * N_CTX + 1] = mx;
+        let (l1, l2) = self.long.inputs(&self.st, self.c0, self.bitpos);
+        self.x[3 * N_CTX + 3] = l1;
+        self.x[3 * N_CTX + 4] = l2;
         self.x[3 * N_CTX + 2] = 256;
         let sel2 = (if expected.is_some() { self.match_bucket() } else { 0 }) << 6
             | (self.bitpos as usize) << 3
@@ -485,6 +551,7 @@ impl Predictor {
         for i in 0..N_CTX {
             if self.run_idx[i] != usize::MAX { counter_update(&mut self.run_ctr[self.run_idx[i]], bit, 255, &self.rates); }
         }
+        self.long.update_bit(bit, &self.rates);
         if self.match_idx != usize::MAX {
             counter_update(&mut self.match_ctr[self.match_idx], bit, 1023, &self.rates);
         }
@@ -577,5 +644,6 @@ impl Predictor {
             self.match_tab[h] = pos as u32;
         }
         self.match_byte = if self.match_len > 0 { self.buf[self.match_ptr] as u32 } else { 0 };
+        self.long.update_byte(&self.buf, b);
     }
 }
