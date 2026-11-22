@@ -235,7 +235,7 @@ impl Apm {
 
 // ------------------------------------------------------------------ predictor
 
-const N_CTX: usize = 12;         // hashed context models
+const N_CTX: usize = 14;         // hashed context models
 const N_IN: usize = 3 * N_CTX + 3;   // two per context + match model (2 inputs) + bias
 const MATCH_MIN: usize = 7;
 
@@ -261,6 +261,7 @@ pub struct Predictor {
     word: u64,
     prev_word: u64,
     prev_word2: u64,
+    col: u64,        // bytes since the last newline
     markup: u64,     // innermost open wiki/XML delimiter and the line's first byte
     // match model
     buf: Vec<u8>,
@@ -293,7 +294,7 @@ impl Predictor {
     /// `n` is the input length; table sizes grow with it (and are part of the format).
     pub fn new(n: usize) -> Self {
         let big = if n > 256 << 20 { 22 } else if n > 32 << 20 { 21 } else if n > 4 << 20 { 20 } else { 18 };
-        let bits = [12, 16, big - 2, big, big, big, big, big - 1, big, big - 2, big - 2, big - 1];
+        let bits = [12, 16, big - 2, big, big, big, big, big - 1, big, big - 2, big - 2, big - 1, big, big - 2];
         let match_bits = (big + 2).min(24);
         Predictor {
             st: Stretch::new(),
@@ -317,6 +318,7 @@ impl Predictor {
             prev_word: 0,
             prev_word2: 0,
             markup: 0,
+            col: 0,
             buf: Vec::with_capacity(n),
             match_tab: vec![0; 1 << match_bits],
             match_bits,
@@ -370,6 +372,8 @@ impl Predictor {
             hash2(9, hash2(hash2(self.word, self.prev_word), self.prev_word2)),
             hash2(10, hash2(self.markup, c & 0xffff)),
             hash2(11, hash2(self.word, c & 0xff)),
+            hash2(12, c & 0xff_ffff_ffff),
+            hash2(13, hash2(self.col.min(255), c & 0xff)),
         ];
     }
 
@@ -512,6 +516,7 @@ impl Predictor {
             self.prev_word = self.word;
             self.word = 0;
         }
+        self.col = if b == b'\n' { 0 } else { self.col + 1 };
         let (open, line_first) = (self.markup & 0xff, self.markup >> 8 & 0xff);
         self.markup = match b {
             b'\n' => 0,
