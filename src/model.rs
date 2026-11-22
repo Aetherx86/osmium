@@ -363,7 +363,7 @@ pub struct Predictor {
 impl Predictor {
     /// `n` is the input length; table sizes grow with it (and are part of the format).
     pub fn new(n: usize) -> Self {
-        let big = if n > 256 << 20 { 22 } else if n > 32 << 20 { 21 } else if n > 4 << 20 { 20 } else { 18 };
+        let big = if n > 512 << 20 { 23 } else if n > 256 << 20 { 22 } else if n > 32 << 20 { 21 } else if n > 4 << 20 { 20 } else { 18 };
         let bits = [12, 16, big - 2, big, big, big, big, big - 1, big, big - 2, big - 2, big - 1, big, big - 2, big - 2, big, big - 1, big - 1, big - 1];
         let match_bits = (big + 2).min(24);
         Predictor {
