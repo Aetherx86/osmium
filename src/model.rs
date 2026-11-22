@@ -76,7 +76,7 @@ impl NextState {
         let mut t = [[0u8; 2]; 256];
         for (st, row) in t.iter_mut().enumerate() {
             let (n0, n1) = ((st >> 4) as u8, (st & 15) as u8);
-            let disc = |n: u8| if n > 2 { 2 + (n - 2) / 2 } else { n };
+            let disc = |n: u8| if n > 5 { 5 + (n - 5) / 2 } else { n };
             row[0] = ((n0 + 1).min(15) << 4) | disc(n1);
             row[1] = (disc(n0) << 4) | (n1 + 1).min(15);
         }
