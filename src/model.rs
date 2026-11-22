@@ -194,7 +194,7 @@ impl Mixer {
         let e = err * self.lr;
         let w = &mut self.weights[self.set..self.set + self.n];
         for (wi, &xi) in w.iter_mut().zip(x) {
-            *wi += (xi * e) >> 12;
+            *wi += (xi * e) >> 14;
         }
     }
 }
@@ -341,7 +341,7 @@ impl Predictor {
             m1: Mixer::new(N_IN, 256, 3),
             m2: Mixer::new(N_IN, 2048, 3),
             m3: Mixer::new(N_IN, 256 * 8, 3),
-            mf: Mixer::new(5, 256, 1),
+            mf: Mixer::new(5, 256, 4),
             xf: [0; 5],
             pr_mix: 2048,
             pr1: 2048,
