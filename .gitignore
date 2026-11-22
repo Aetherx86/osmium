@@ -1,0 +1,4 @@
+/target
+*.osm
+/data
+exp.sh
