@@ -64,61 +64,97 @@ fn counter_update(c: &mut u32, bit: u8, limit: u32, rates: &Rates) {
     *c = ((p as u32) << 10) | if n < limit { n + 1 } else { n };
 }
 
+// ------------------------------------------------------------------ bit histories
+
+/// A bit history in one byte: counts of zeros (high nibble) and ones (low nibble), each
+/// saturating at 15. On a bit, the opposite count is discounted (to 2 + half the excess), so
+/// the history favours recent behaviour as in paq's nonstationary states.
+struct NextState([[u8; 2]; 256]);
+
+impl NextState {
+    fn new() -> Self {
+        let mut t = [[0u8; 2]; 256];
+        for (st, row) in t.iter_mut().enumerate() {
+            let (n0, n1) = ((st >> 4) as u8, (st & 15) as u8);
+            let disc = |n: u8| if n > 2 { 2 + (n - 2) / 2 } else { n };
+            row[0] = ((n0 + 1).min(15) << 4) | disc(n1);
+            row[1] = (disc(n0) << 4) | (n1 + 1).min(15);
+        }
+        NextState(t)
+    }
+}
+
+/// Adaptive map from bit history to probability, one per context model.
+struct StateMap([u32; 256]);
+
+impl StateMap {
+    fn new() -> Self {
+        let mut t = [0u32; 256];
+        for (st, c) in t.iter_mut().enumerate() {
+            let (n0, n1) = ((st >> 4) as f64, (st & 15) as f64);
+            let p = ((n1 + 0.4) / (n0 + n1 + 0.8) * (1 << 22) as f64) as u32;
+            *c = p.min((1 << 22) - 1) << 10;
+        }
+        StateMap(t)
+    }
+}
+
 // ------------------------------------------------------------------ hashed nibble slots
 
-/// One context's 15 bit-counters for a nibble (index 1..15 = partial nibble with a leading
-/// 1), plus a check word to detect hash collisions. Exactly one cache line.
+/// One context's 15 bit histories for a nibble (index 1..15 = partial nibble with a leading
+/// 1) and an 8-bit check. Four slots share a cache line (4-way set associative).
+#[derive(Clone, Copy)]
+#[repr(C)]
+struct Slot {
+    check: u8,
+    s: [u8; 15],
+}
+
 #[derive(Clone, Copy)]
 #[repr(C, align(64))]
-struct Slot {
-    check: u16,
-    run_byte: u8,  // in a byte's first slot: the last byte seen after this context
-    run_count: u8, // and how many times in a row
-    c: [u32; 15],
-}
+struct Bucket([Slot; 4]);
 
-/// Slot entries hold two 16-bit counters (12-bit probability, 4-bit count): a slow one in the
-/// high half and a fast one in the low half.
-const PAIR_INIT: u32 = 0x8000_8000;
-const EMPTY_SLOT: Slot = Slot { check: 0, run_byte: 0, run_count: 0, c: [PAIR_INIT; 15] };
-
-#[inline]
-fn half_update(h: u32, bit: u8, limit: u32, rates: &Rates) -> u32 {
-    let n = h & 15;
-    let p = (h >> 4) as i64;
-    let target = if bit == 1 { 4095 } else { 0 };
-    let p = (p + (((target - p) * rates.0[n as usize] as i64) >> 16)).clamp(1, 4095) as u32;
-    (p << 4) | if n < limit { n + 1 } else { n }
-}
-
-/// High half: slow probability (16 bits). Low half: fast probability (12 bits) and a shared
-/// hit count (4 bits). The slow rate is 1/(n+1.5) up to `slow`, the fast one up to `fast`.
-#[inline]
-fn pair_update(c: &mut u32, bit: u8, slow: u32, fast: u32, rates: &Rates) {
-    let n = *c & 15;
-    let ps = (*c >> 16) as i64;
-    let pf = ((*c & 0xffff) >> 4) as i64;
-    let (ts, tf) = if bit == 1 { (65535, 4095) } else { (0, 0) };
-    let ps = (ps + (((ts - ps) * rates.0[n.min(slow) as usize] as i64) >> 16)).clamp(16, 65519) as u32;
-    let pf = (pf + (((tf - pf) * rates.0[n.min(fast) as usize] as i64) >> 16)).clamp(1, 4095) as u32;
-    *c = ps << 16 | pf << 4 | (n + 1).min(15);
-}
+const EMPTY_BUCKET: Bucket = Bucket([Slot { check: 0, s: [0; 15] }; 4]);
 
 struct SlotTable {
-    slots: Vec<Slot>,
+    buckets: Vec<Bucket>,
     mask: usize,
 }
 
 impl SlotTable {
-    fn new(bits: u32) -> Self { SlotTable { slots: vec![EMPTY_SLOT; 1 << bits], mask: (1 << bits) - 1 } }
+    /// `bits` counts cache lines (as before); each holds four contexts.
+    fn new(bits: u32) -> Self { SlotTable { buckets: vec![EMPTY_BUCKET; 1 << bits], mask: (1 << bits) - 1 } }
 
-    /// Index of the slot for `h`, claiming (and resetting) it if another context owned it.
+    /// (bucket, way) for `h` and whether the context was already present. A new context
+    /// replaces the way whose first bit history has seen the fewest bits.
     #[inline]
-    fn find(&mut self, h: u64) -> usize {
+    fn find(&mut self, h: u64) -> (usize, usize, bool) {
+        let bi = h as usize & self.mask;
+        let check = (h >> 56) as u8 | 1;
+        let b = &mut self.buckets[bi].0;
+        for (w, sl) in b.iter().enumerate() {
+            if sl.check == check { return (bi, w, true); }
+        }
+        let total = |sl: &Slot| if sl.check == 0 { 0 } else { 1 + (sl.s[0] >> 4) as u32 + (sl.s[0] & 15) as u32 };
+        let w = (0..4).min_by_key(|&w| total(&b[w])).unwrap();
+        b[w] = Slot { check, s: [0; 15] };
+        (bi, w, false)
+    }
+}
+
+/// Per byte context: the byte that last followed it and how many times in a row (16-bit check).
+struct RunTable {
+    t: Vec<u32>,
+    mask: usize,
+}
+
+impl RunTable {
+    fn new(bits: u32) -> Self { RunTable { t: vec![0; 1 << bits], mask: (1 << bits) - 1 } }
+    #[inline]
+    fn index(&mut self, h: u64) -> usize {
         let i = h as usize & self.mask;
-        let check = (h >> 48) as u16 | 1;
-        let s = &mut self.slots[i];
-        if s.check != check { *s = EMPTY_SLOT; s.check = check; }
+        let check = (h >> 48) as u32;
+        if self.t[i] >> 16 != check { self.t[i] = check << 16; }
         i
     }
 }
@@ -206,9 +242,14 @@ pub struct Predictor {
     st: Stretch,
     rates: Rates,
     tables: Vec<SlotTable>,
+    runs: Vec<RunTable>,
+    maps: Vec<StateMap>,
+    next: NextState,
+    way: [usize; N_CTX],
+    run_at: [usize; N_CTX],
     ctx: [u64; N_CTX],
     slot: [usize; N_CTX],
-    hi_slot: [usize; N_CTX],
+    state: [u8; N_CTX],
     run_ctr: Vec<u32>,
     run_idx: [usize; N_CTX],
     // byte state
@@ -257,9 +298,14 @@ impl Predictor {
             st: Stretch::new(),
             rates: Rates::new(),
             tables: bits.iter().map(|&b| SlotTable::new(b)).collect(),
+            runs: bits.iter().map(|&b| RunTable::new(b + 2)).collect(),
+            maps: (0..N_CTX).map(|_| StateMap::new()).collect(),
+            next: NextState::new(),
+            way: [0; N_CTX],
+            run_at: [0; N_CTX],
             ctx: [0; N_CTX],
             slot: [0; N_CTX],
-            hi_slot: [0; N_CTX],
+            state: [0; N_CTX],
             run_ctr: vec![COUNTER_INIT; N_CTX * 64],
             run_idx: [usize::MAX; N_CTX],
             c0: 1,
@@ -328,9 +374,13 @@ impl Predictor {
 
     fn find_slots(&mut self) {
         for i in 0..N_CTX {
-            self.slot[i] = self.tables[i].find(hash2(self.ctx[i], self.c0 as u64));
+            let (b, w, _) = self.tables[i].find(hash2(self.ctx[i], self.c0 as u64));
+            self.slot[i] = b;
+            self.way[i] = w;
         }
-        if self.bitpos == 0 { self.hi_slot = self.slot; }
+        if self.bitpos == 0 {
+            for i in 0..N_CTX { self.run_at[i] = self.runs[i].index(hash2(self.ctx[i], 0x52_55_4e)); }
+        }
     }
 
     fn match_bucket(&self) -> usize {
@@ -340,9 +390,13 @@ impl Predictor {
 
     fn predict(&mut self) {
         for i in 0..N_CTX {
-            let c = self.tables[i].slots[self.slot[i]].c[self.nib - 1];
-            self.x[2 * i] = self.st.get((c >> 20) as i32);  // slow, top 12 of 16 bits
-            self.x[2 * i + 1] = self.st.get(((c & 0xffff) >> 4) as i32);
+            let state = self.tables[i].buckets[self.slot[i]].0[self.way[i]].s[self.nib - 1];
+            self.state[i] = state;
+            let p = counter_p12(self.maps[i].0[state as usize]);
+            self.x[2 * i] = self.st.get(p);
+            // a second view: how one-sided the history is (deterministic contexts)
+            let (n0, n1) = ((state >> 4) as i32, (state & 15) as i32);
+            self.x[2 * i + 1] = if n0 == 0 && n1 > 0 { 64 * n1 } else if n1 == 0 && n0 > 0 { -64 * n0 } else { 0 };
         }
         // match model: does the byte at the match pointer still agree with this byte so far?
         let expected = if self.match_len > 0 && (self.match_byte + 256) >> (8 - self.bitpos) == self.c0 {
@@ -361,8 +415,8 @@ impl Predictor {
         };
         // run model: the byte that last followed each context, if it still agrees with this byte
         for i in 0..N_CTX {
-            let s = &self.tables[i].slots[self.hi_slot[i]];
-            let (rb, rc) = (s.run_byte as u32, s.run_count as usize);
+            let r = self.runs[i].t[self.run_at[i]];
+            let (rb, rc) = ((r >> 8) & 0xff, (r & 0xff) as usize);
             self.x[2 * N_CTX + 2 + i] = if rc > 0 && (rb + 256) >> (8 - self.bitpos) == self.c0 {
                 let eb = ((rb >> (7 - self.bitpos)) & 1) as usize;
                 self.run_idx[i] = i * 64 + rc.min(31) * 2 + eb;
@@ -402,7 +456,9 @@ impl Predictor {
         let nib = self.nib - 1;
         for i in 0..N_CTX {
             let s = self.slot[i];
-            pair_update(&mut self.tables[i].slots[s].c[nib], bit, if i < 2 { 15 } else { 15 }, 4, &self.rates);
+            let st = self.state[i];
+            counter_update(&mut self.maps[i].0[st as usize], bit, 1023, &self.rates);
+            self.tables[i].buckets[s].0[self.way[i]].s[nib] = self.next.0[st as usize][bit as usize];
         }
         for i in 0..N_CTX {
             if self.run_idx[i] != usize::MAX { counter_update(&mut self.run_ctr[self.run_idx[i]], bit, 255, &self.rates); }
@@ -441,8 +497,9 @@ impl Predictor {
 
     fn end_byte(&mut self, b: u8) {
         for i in 0..N_CTX {
-            let s = &mut self.tables[i].slots[self.hi_slot[i]];
-            if s.run_count > 0 && s.run_byte == b { s.run_count = s.run_count.saturating_add(1); } else { s.run_byte = b; s.run_count = 1; }
+            let r = &mut self.runs[i].t[self.run_at[i]];
+            let (rb, rc) = ((*r >> 8) & 0xff, *r & 0xff);
+            *r = (*r & 0xffff_0000) | if rc > 0 && rb == b as u32 { rb << 8 | (rc + 1).min(255) } else { (b as u32) << 8 | 1 };
         }
         self.c4 = (self.c4 << 8) | b as u64;
         // words: letters (case-folded) and digits; anything else ends the word
