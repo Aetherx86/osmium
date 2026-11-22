@@ -13,7 +13,7 @@ pub use coder::{Decoder, Encoder};
 pub use model::Predictor;
 
 /// File header: magic, format version, then the original length as a little-endian u64.
-pub const MAGIC: &[u8; 4] = b"OSM\x01";
+pub const MAGIC: &[u8; 4] = b"OSM\x02";
 
 /// Compress `input`, calling `progress(done_bytes)` every 4 MiB.
 pub fn compress(input: &[u8], mut progress: impl FnMut(usize)) -> Vec<u8> {

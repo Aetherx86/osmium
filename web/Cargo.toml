@@ -1,6 +1,6 @@
 [package]
 name = "osmium-web"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 publish = false
 description = "Browser build of Osmium (same format as the command-line tool)."
