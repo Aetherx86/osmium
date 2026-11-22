@@ -539,7 +539,7 @@ impl Predictor {
         // match state: length bucket and expected bit (or none), with the partial byte
         let ms = if self.match_idx == usize::MAX { 0 } else { self.match_idx + 1 };
         let p4 = self.a4.pp(&self.st, self.pr_mix, (ms.min(63) << 8) | self.c0 as usize);
-        self.pr = ((self.pr_mix + 2 * p1 + 2 * p2 + 2 * p3 + p4 + 4) >> 3).clamp(1, 4095);
+        self.pr = ((p1 + 2 * p2 + 3 * p3 + 2 * p4 + 4) >> 3).clamp(1, 4095);
     }
 
     pub fn update(&mut self, bit: u8) {
