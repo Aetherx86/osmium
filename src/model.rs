@@ -354,6 +354,9 @@ pub struct Predictor {
     a2: Apm,
     a3: Apm,
     a4: Apm,
+    ms: Mixer,
+    xs: [i32; 6],
+    pr_ms: i32,
     pr: i32,
 }
 
@@ -414,6 +417,9 @@ impl Predictor {
             a2: Apm::new(65536, 7),
             a3: Apm::new(1 << 20, 7),
             a4: Apm::new(64 * 256, 7),
+            ms: Mixer::new(6, 8, 2),
+            xs: [0; 6],
+            pr_ms: 2048,
             pr: 2048,
         }
         .started()
@@ -539,7 +545,11 @@ impl Predictor {
         // match state: length bucket and expected bit (or none), with the partial byte
         let ms = if self.match_idx == usize::MAX { 0 } else { self.match_idx + 1 };
         let p4 = self.a4.pp(&self.st, self.pr_mix, (ms.min(63) << 8) | self.c0 as usize);
-        self.pr = ((p1 + 2 * p2 + 3 * p3 + 2 * p4 + 4) >> 3).clamp(1, 4095);
+        let avg = (p1 + 2 * p2 + 3 * p3 + 2 * p4 + 4) >> 3;
+        self.xs = [self.st.get(avg), self.st.get(p1), self.st.get(p2), self.st.get(p3), self.st.get(p4), self.st.get(self.pr_mix)];
+        let sm = self.ms.mix(&self.xs, self.bitpos as usize);
+        self.pr_ms = squash(sm).clamp(1, 4095);
+        self.pr = ((avg + self.pr_ms + 1) >> 1).clamp(1, 4095);
     }
 
     pub fn update(&mut self, bit: u8) {
@@ -569,6 +579,8 @@ impl Predictor {
         self.a2.update(bit);
         self.a3.update(bit);
         self.a4.update(bit);
+        let xs = self.xs;
+        self.ms.update(&xs, ((bit as i32) << 12) - self.pr_ms);
 
         // advance bit state
         self.c0 = (self.c0 << 1) | bit as u32;
