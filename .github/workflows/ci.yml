@@ -1,0 +1,24 @@
+name: CI
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - run: cargo test --release
+      - name: Round trip on a generated text sample
+        run: |
+          cargo build --release
+          for i in $(seq 1 3000); do echo "Line $i of the sample: the [[quick]] brown {{fox}} jumps over the lazy dog $((i*i))."; done > sample.txt
+          ./target/release/osmium t sample.txt
+      - name: Browser build compiles
+        run: cargo build --release --target wasm32-unknown-unknown --manifest-path web/Cargo.toml
