@@ -85,12 +85,13 @@ impl NextState {
 }
 
 /// Adaptive map from bit history to probability, one per context model.
-struct StateMap([u32; 256]);
+struct StateMap(Vec<u32>);
 
 impl StateMap {
     fn new() -> Self {
-        let mut t = [0u32; 256];
-        for (st, c) in t.iter_mut().enumerate() {
+        let mut t = vec![0u32; 256 * 8];
+        for (i, c) in t.iter_mut().enumerate() {
+            let st = i & 255;
             let (n0, n1) = ((st >> 4) as f64, (st & 15) as f64);
             let p = ((n1 + 0.4) / (n0 + n1 + 0.8) * (1 << 22) as f64) as u32;
             *c = p.min((1 << 22) - 1) << 10;
@@ -392,7 +393,7 @@ impl Predictor {
         for i in 0..N_CTX {
             let state = self.tables[i].buckets[self.slot[i]].0[self.way[i]].s[self.nib - 1];
             self.state[i] = state;
-            let p = counter_p12(self.maps[i].0[state as usize]);
+            let p = counter_p12(self.maps[i].0[self.bitpos as usize * 256 + state as usize]);
             self.x[2 * i] = self.st.get(p);
             // a second view: how one-sided the history is (deterministic contexts)
             let (n0, n1) = ((state >> 4) as i32, (state & 15) as i32);
@@ -457,7 +458,7 @@ impl Predictor {
         for i in 0..N_CTX {
             let s = self.slot[i];
             let st = self.state[i];
-            counter_update(&mut self.maps[i].0[st as usize], bit, 1023, &self.rates);
+            counter_update(&mut self.maps[i].0[self.bitpos as usize * 256 + st as usize], bit, 1023, &self.rates);
             self.tables[i].buckets[s].0[self.way[i]].s[nib] = self.next.0[st as usize][bit as usize];
         }
         for i in 0..N_CTX {
