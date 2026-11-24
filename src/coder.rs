@@ -14,12 +14,22 @@ fn split(x1: u32, x2: u32, p: u32) -> u32 {
 }
 
 impl Encoder {
-    pub fn new(out: Vec<u8>) -> Self { Encoder { x1: 0, x2: u32::MAX, out } }
+    pub fn new(out: Vec<u8>) -> Self {
+        Encoder {
+            x1: 0,
+            x2: u32::MAX,
+            out,
+        }
+    }
 
     #[inline]
     pub fn encode(&mut self, bit: u8, p: u32) {
         let xmid = split(self.x1, self.x2, p);
-        if bit == 1 { self.x2 = xmid } else { self.x1 = xmid + 1 }
+        if bit == 1 {
+            self.x2 = xmid
+        } else {
+            self.x1 = xmid + 1
+        }
         while (self.x1 ^ self.x2) & 0xff00_0000 == 0 {
             self.out.push((self.x2 >> 24) as u8);
             self.x1 <<= 8;
@@ -44,8 +54,16 @@ pub struct Decoder<'a> {
 
 impl<'a> Decoder<'a> {
     pub fn new(data: &'a [u8]) -> Self {
-        let mut d = Decoder { x1: 0, x2: u32::MAX, x: 0, data, pos: 0 };
-        for _ in 0..4 { d.x = (d.x << 8) | d.next() as u32; }
+        let mut d = Decoder {
+            x1: 0,
+            x2: u32::MAX,
+            x: 0,
+            data,
+            pos: 0,
+        };
+        for _ in 0..4 {
+            d.x = (d.x << 8) | d.next() as u32;
+        }
         d
     }
 
@@ -57,13 +75,19 @@ impl<'a> Decoder<'a> {
     }
 
     /// True if decoding needed bytes beyond the end of the input (a truncated file).
-    pub fn overrun(&self) -> bool { self.pos > self.data.len() + 4 }
+    pub fn overrun(&self) -> bool {
+        self.pos > self.data.len() + 4
+    }
 
     #[inline]
     pub fn decode(&mut self, p: u32) -> u8 {
         let xmid = split(self.x1, self.x2, p);
         let bit = (self.x <= xmid) as u8;
-        if bit == 1 { self.x2 = xmid } else { self.x1 = xmid + 1 }
+        if bit == 1 {
+            self.x2 = xmid
+        } else {
+            self.x1 = xmid + 1
+        }
         while (self.x1 ^ self.x2) & 0xff00_0000 == 0 {
             self.x1 <<= 8;
             self.x2 = (self.x2 << 8) | 255;

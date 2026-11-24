@@ -1,6 +1,6 @@
 [package]
 name = "osmium"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 description = "Context-mixing compressor for text, built around the Hutter Prize data (enwik8/enwik9)"
 license = "MIT"

@@ -71,11 +71,47 @@ length, which is stored in the header (inputs over 512 MB use about 9 GB).
 
 ```sh
 cargo build --release
-./target/release/osmium c enwik8 enwik8.osm    # compress
-./target/release/osmium d enwik8.osm enwik8.out # decompress
-./target/release/osmium t enwik8                # compress, decompress in memory, compare
+./target/release/osmium c enwik8 enwik8.osm    # compress (OSM v2, bit-identical to 0.2.0)
+./target/release/osmium d enwik8.osm enwik8.out # decompress (reads OSM v2 and OSM v3)
+./target/release/osmium t enwik8                # compress, decompress in memory, verify, report
 cargo test --release
 ```
+
+### Framed v3 archives, streaming, presets, and diagnostics (0.3.0)
+
+Plain `osmium c` and `osmium::compress` keep the minimal `OSM\x02` format byte-identical to
+0.2.0. Passing any v3 option (`--v3`, `-l/--level`, `--table-bits`, `-b/--block-size`,
+`-x/--transform`) or piping through `-` writes the framed `OSM\x03` format, which adds:
+
+- **Integrity verification**: Castagnoli CRC-32C per block and SHA-256 over the full stream.
+- **Memory presets**: `-l 1` (`table_bits = 13`, ~7 MiB) through `-l 7` (`table_bits = 23`,
+  ~9 GiB), `-l 0` (auto), or explicit `--table-bits 12..23`.
+- **Reversible text/markup transform (`-x`)**: bijective case folding and static Wikipedia/XML
+  token compaction using non-UTF-8 marker bytes (zero escaping overhead on UTF-8, lossless on
+  arbitrary binary data).
+- **Parallel blocks and streaming**: `-b <size> -j <threads>` splits into independent blocks
+  encoded deterministically across worker threads; `-` reads/writes streams in bounded memory.
+- **Inspection, verification, and entropy analysis**: `i` (inspect), `v` (verify), and `a`
+  (per-stage cross-entropy and 19-context hit-rate breakdown), all with `--json`.
+
+```sh
+# Framed v3 with low-memory preset, text transform, 64 KiB blocks, 4 threads, JSON output
+./target/release/osmium c sample.txt sample.osm -l 1 -b 64K -j 4 -x --json
+
+# Inspect headers without decompressing, then verify CRC-32C and SHA-256
+./target/release/osmium i sample.osm
+./target/release/osmium v sample.osm -j 4 --json
+
+# Stream via stdin/stdout in bounded memory
+./target/release/osmium c - - -l 1 -b 64K -x < sample.txt | ./target/release/osmium d - - > sample.out
+
+# Per-stage cross-entropy and context hit-rate diagnostics
+./target/release/osmium a sample.txt -l 1 -x
+```
+
+The browser crate (`web/`) preserves `compress` and `decompress` (supporting both `OSM\x02`
+and `OSM\x03`) and exports `compress_v3`, `inspect_json`, `verify_json`, `analyze_json`, and
+`version`.
 
 The data: `curl -LO http://mattmahoney.net/dc/enwik9.zip && unzip enwik9.zip`, and
 `head -c 100000000 enwik9 > enwik8`. SHA-256 of `enwik9`:
