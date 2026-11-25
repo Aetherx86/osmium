@@ -5,7 +5,7 @@ A context-mixing compressor for text, written in Rust and measured on the
 of an English Wikipedia dump. One small program both compresses and decompresses, and every
 result below is a verified round trip (decompressed output compared byte for byte with the input).
 
-Live demo: <https://aetherx86.github.io/osmium/> runs the same code, compiled to WebAssembly,
+Live demo: <https://omakasekim.github.io/osmium/> runs the same code, compiled to WebAssembly,
 in the browser. Its `.osm` files are byte-identical to the command-line tool's.
 
 ## Results
