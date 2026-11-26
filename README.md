@@ -1,5 +1,7 @@
 # Osmium
 
+[![Korean Docs](https://img.shields.io/badge/docs-%ED%95%9C%EA%B5%AD%EC%96%B4-brightgreen.svg)](./README.ko.md)
+
 A context-mixing compressor for text, written in Rust and measured on the
 [Hutter Prize](http://prize.hutter1.net/) data: `enwik8` and `enwik9`, the first 100 MB and 1 GB
 of an English Wikipedia dump. One small program both compresses and decompresses, and every
